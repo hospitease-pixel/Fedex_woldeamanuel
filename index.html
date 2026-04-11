@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lomi Smart Cards</title>
     <meta name="theme-color" content="#111827" />
-    <meta property="og:title" content="Lomi  - Digital Business Card" />
-    <meta property="og:description" content="Founder & CEO of Lomi Legacy. One Tap.Done" />
-    <meta property="og:image" content="https://i.ibb.co/zTR9JFVx/Lomi-smart-card-20260324-153530-0000.png" /> 
+    <meta property="og:title" content="Woldeamanuel Jemaneh - Digital Business Card" />
+    <meta property="og:description" content="Commercial Director at FedEx. One Tap. Done." />
+    <meta property="og:image" content="https://i.ibb.co/845QShrQ/5908740101892672933.jpg" /> 
     <meta property="og:type" content="website" />
     <link rel="dns-prefetch" href="//cdn.tailwindcss.com" />
     <link rel="dns-prefetch" href="//www.gstatic.com" />
@@ -298,23 +298,25 @@
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'lomi-card-v1';
 
+        const PROFILE_KEY = "woldeamanuel-jemaneh-v1"; // Change this whenever you switch profiles
+
         const DEFAULT_DATA = {
+            _profileKey: PROFILE_KEY,
             adminPassword: "Admin",
-            name: "Sofonias Genanaw",
-            organization: "Lomi Legacy", 
-            title: "Founder & CEO",
-            bio: "One Tap.Done",
-            image: "https://i.ibb.co/zTR9JFVx/Lomi-smart-card-20260324-153530-0000.png",
-            logo: "https://i.ibb.co/zTR9JFVx/Lomi-smart-card-20260324-153530-0000.png",
-            phones: ["0920508303"],
-            emails: ["sofi122112@gmail.com"],
-            website: "https://sofonias-g.vercel.app",
-            location: "https://maps.app.goo.gl/7fNW5PpJraVmqeCd7",
+            name: "Woldeamanuel Jemaneh",
+            organization: "FedEx",
+            title: "Commercial Director",
+            bio: "",
+            image: "https://i.ibb.co/845QShrQ/5908740101892672933.jpg",
+            logo: "https://i.ibb.co/kgKpKq19/Dentist-Zerubabel-Mulugeta-20260324-123121-0000.png",
+            phones: ["+251931152541"],
+            emails: ["amanuelj80@gmail.com", "Woldeamanuel.jemaneh@aau.edu.et"],
+            website: "",
+            location: "",
             qrLink: "",
             socialLinks: [
-                { platform: 'instagram', url: 'https://instagram.com' },
-                { platform: 'facebook', url: 'https://facebook.com' },
-                { platform: 'telegram', url: 'https://t.me' }
+                { platform: 'instagram', url: 'https://www.instagram.com/amaniuel_j?igsh=MWlpbXplbDcyYXZzOA==' },
+                { platform: 'linkedin', url: 'https://www.linkedin.com/in/woldeamanuel-jemaneh?utm_source=share_via&utm_content=profile&utm_medium=member_android' }
             ],
             customLinks: [],
             portfolio: "",
@@ -595,7 +597,14 @@
             const cached = localStorage.getItem('cached_profile');
             if (cached) {
                 try {
-                    CONTACT_DATA = normalizeContactData(JSON.parse(cached));
+                    const parsed = JSON.parse(cached);
+                    // If the cached profile belongs to a different person, clear it
+                    if (parsed._profileKey !== PROFILE_KEY) {
+                        localStorage.removeItem('cached_profile');
+                        CONTACT_DATA = normalizeContactData(DEFAULT_DATA);
+                    } else {
+                        CONTACT_DATA = normalizeContactData(parsed);
+                    }
                 } catch (err) {
                     CONTACT_DATA = normalizeContactData(DEFAULT_DATA);
                 }
