@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -296,12 +297,15 @@
             measurementId: "G-YY97G59MNF"
         };
 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lomi-card-v1';
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'woldeamanuel-jemaneh-card-v1';
 
-        const PROFILE_KEY = "woldeamanuel-jemaneh-v1"; // Change this whenever you switch profiles
+        const PROFILE_KEY = "woldeamanuel-jemaneh-v2"; // Change this whenever you switch profiles
+        const PROFILE_CACHE_STORAGE_KEY = 'cached_profile';
+        const PENDING_CLOUD_SAVE_KEY = `${PROFILE_KEY}-pending-cloud-save`;
 
         const DEFAULT_DATA = {
             _profileKey: PROFILE_KEY,
+            updatedAt: 0,
             adminPassword: "Admin",
             name: "Woldeamanuel Jemaneh",
             organization: "FedEx",
@@ -315,6 +319,7 @@
             location: "",
             qrLink: "",
             socialLinks: [
+                { platform: 'whatsapp', url: 'https://wa.me/251931152541' },
                 { platform: 'instagram', url: 'https://www.instagram.com/amaniuel_j?igsh=MWlpbXplbDcyYXZzOA==' },
                 { platform: 'linkedin', url: 'https://www.linkedin.com/in/woldeamanuel-jemaneh?utm_source=share_via&utm_content=profile&utm_medium=member_android' }
             ],
@@ -333,6 +338,8 @@
         let isCloudSynced = false;
         let firebaseClient = null;
         let syncUnsubscribe = null;
+        let pendingCloudSave = null;
+        let cloudSaveInFlight = false;
         const loadedScripts = {};
 
         const PLATFORMS = {
@@ -421,6 +428,49 @@
             return merged;
         }
 
+        function getDataTimestamp(data = {}) {
+            return Number.isFinite(data.updatedAt) ? data.updatedAt : 0;
+        }
+
+        function resolveStoredProfileData(data = {}) {
+            if (!data || typeof data !== 'object') {
+                return normalizeContactData(DEFAULT_DATA);
+            }
+
+            const storedKey = data._profileKey || "";
+            const legacyLogo = "https://i.ibb.co/kgKpKq19/Dentist-Zerubabel-Mulugeta-20260324-123121-0000.png";
+
+            if (storedKey === "woldeamanuel-jemaneh-v1") {
+                return normalizeContactData({
+                    ...data,
+                    _profileKey: PROFILE_KEY,
+                    logo: DEFAULT_DATA.logo
+                });
+            }
+
+            if (storedKey && storedKey !== PROFILE_KEY) {
+                return normalizeContactData(DEFAULT_DATA);
+            }
+
+            if (!storedKey && data.logo === legacyLogo) {
+                return normalizeContactData({
+                    ...data,
+                    _profileKey: PROFILE_KEY,
+                    logo: DEFAULT_DATA.logo
+                });
+            }
+
+            return normalizeContactData(data);
+        }
+
+        function stampProfileData(data = {}) {
+            return resolveStoredProfileData({
+                ...data,
+                _profileKey: PROFILE_KEY,
+                updatedAt: Date.now()
+            });
+        }
+
         function getEffectiveQrTarget() {
             const customQrLink = (CONTACT_DATA.qrLink || "").trim();
             if (customQrLink) return customQrLink;
@@ -428,7 +478,31 @@
         }
 
         function cacheContactData(data) {
-            localStorage.setItem('cached_profile', JSON.stringify(data));
+            localStorage.setItem(PROFILE_CACHE_STORAGE_KEY, JSON.stringify(data));
+        }
+
+        function cachePendingCloudSave(data) {
+            pendingCloudSave = resolveStoredProfileData(data);
+            localStorage.setItem(PENDING_CLOUD_SAVE_KEY, JSON.stringify(pendingCloudSave));
+        }
+
+        function clearPendingCloudSave() {
+            pendingCloudSave = null;
+            localStorage.removeItem(PENDING_CLOUD_SAVE_KEY);
+        }
+
+        function loadPendingCloudSave() {
+            if (pendingCloudSave) return pendingCloudSave;
+            const cachedPending = localStorage.getItem(PENDING_CLOUD_SAVE_KEY);
+            if (!cachedPending) return null;
+            try {
+                pendingCloudSave = resolveStoredProfileData(JSON.parse(cachedPending));
+                return pendingCloudSave;
+            } catch (err) {
+                pendingCloudSave = null;
+                localStorage.removeItem(PENDING_CLOUD_SAVE_KEY);
+                return null;
+            }
         }
 
         function loadExternalScript(src) {
@@ -518,15 +592,14 @@
             return await firebaseClient.getDownloadURL(storageRef);
         }
 
-        async function saveProfileToCloud(data) {
-            if (!isCloudSynced || !firebaseClient) return;
+        async function writeProfileToCloud(data) {
             const docRef = firebaseClient.doc(firebaseClient.db, 'artifacts', appId, 'public', 'data', 'profiles', 'main');
             setSyncStatus("SYNC: SAVING", true);
 
             try {
                 // FIX: Upload any base64 images to Storage before writing to Firestore.
                 // Firestore documents are capped at 1 MB — a single photo can easily exceed that.
-                const saveData = { ...data };
+                const saveData = { ...resolveStoredProfileData(data) };
 
                 if (saveData.image && saveData.image.startsWith('data:')) {
                     setSyncStatus("SYNC: UPLOADING IMAGE…", true);
@@ -545,16 +618,46 @@
 
                 // FIX: After successful upload, update CONTACT_DATA & cache with the real URLs
                 // so the card always uses the hosted URL (not the local base64 blob)
-                CONTACT_DATA.image = saveData.image;
-                CONTACT_DATA.logo = saveData.logo;
-                CONTACT_DATA.portfolio = saveData.portfolio;
+                CONTACT_DATA = resolveStoredProfileData(saveData);
                 cacheContactData(CONTACT_DATA);
 
                 setSyncStatus("SYNC: CONNECTED", true);
+                return CONTACT_DATA;
             } catch (err) {
                 console.error("Cloud save failed:", err);
-                setSyncStatus("SYNC: OFFLINE", false);
-                alert("Your changes were saved only on this device.\n\nCloud save error: " + (err.message || err));
+                throw err;
+            }
+        }
+
+        async function saveProfileToCloud(data) {
+            const normalizedData = resolveStoredProfileData(data);
+            cachePendingCloudSave(normalizedData);
+
+            if (!isCloudSynced || !firebaseClient) {
+                setSyncStatus("SYNC: PENDING", false);
+                return false;
+            }
+
+            if (cloudSaveInFlight) return true;
+
+            cloudSaveInFlight = true;
+            try {
+                while (pendingCloudSave && isCloudSynced && firebaseClient) {
+                    const nextData = pendingCloudSave;
+                    try {
+                        const savedData = await writeProfileToCloud(nextData);
+                        if (pendingCloudSave && getDataTimestamp(pendingCloudSave) <= getDataTimestamp(savedData)) {
+                            clearPendingCloudSave();
+                        }
+                    } catch (err) {
+                        console.error("Cloud save failed:", err);
+                        setSyncStatus("SYNC: PENDING", false);
+                        return false;
+                    }
+                }
+                return true;
+            } finally {
+                cloudSaveInFlight = false;
             }
         }
 
@@ -583,33 +686,50 @@
             if (syncUnsubscribe) syncUnsubscribe();
             const docRef = firebaseClient.doc(firebaseClient.db, 'artifacts', appId, 'public', 'data', 'profiles', 'main');
             syncUnsubscribe = firebaseClient.onSnapshot(docRef, (snap) => {
+                const queuedData = loadPendingCloudSave();
                 if (snap.exists()) {
-                    CONTACT_DATA = normalizeContactData(snap.data());
+                    const rawData = snap.data() || {};
+                    const remoteData = resolveStoredProfileData(rawData);
+                    const keepQueuedVersion = queuedData && getDataTimestamp(queuedData) > getDataTimestamp(remoteData);
+                    if (keepQueuedVersion) {
+                        CONTACT_DATA = queuedData;
+                        cacheContactData(CONTACT_DATA);
+                        renderUI();
+                        void saveProfileToCloud(CONTACT_DATA);
+                        return;
+                    }
+
+                    CONTACT_DATA = remoteData;
                     cacheContactData(CONTACT_DATA);
                     renderUI();
+                    if (queuedData && getDataTimestamp(remoteData) >= getDataTimestamp(queuedData)) {
+                        clearPendingCloudSave();
+                    }
+                    if (rawData._profileKey !== CONTACT_DATA._profileKey || rawData.logo !== CONTACT_DATA.logo) {
+                        void saveProfileToCloud(CONTACT_DATA);
+                    }
                 } else {
-                    firebaseClient.setDoc(docRef, DEFAULT_DATA);
+                    const initialCloudData = queuedData || CONTACT_DATA || DEFAULT_DATA;
+                    void saveProfileToCloud(initialCloudData);
                 }
             }, () => setSyncStatus("SYNC: OFFLINE", false));
         }
 
         function loadLocalData() {
-            const cached = localStorage.getItem('cached_profile');
+            const pendingData = loadPendingCloudSave();
+            const cached = localStorage.getItem(PROFILE_CACHE_STORAGE_KEY);
             if (cached) {
                 try {
-                    const parsed = JSON.parse(cached);
-                    // If the cached profile belongs to a different person, clear it
-                    if (parsed._profileKey !== PROFILE_KEY) {
-                        localStorage.removeItem('cached_profile');
-                        CONTACT_DATA = normalizeContactData(DEFAULT_DATA);
-                    } else {
-                        CONTACT_DATA = normalizeContactData(parsed);
-                    }
+                    const cachedData = resolveStoredProfileData(JSON.parse(cached));
+                    CONTACT_DATA = pendingData && getDataTimestamp(pendingData) >= getDataTimestamp(cachedData)
+                        ? pendingData
+                        : cachedData;
+                    cacheContactData(CONTACT_DATA);
                 } catch (err) {
-                    CONTACT_DATA = normalizeContactData(DEFAULT_DATA);
+                    CONTACT_DATA = pendingData || normalizeContactData(DEFAULT_DATA);
                 }
             } else {
-                CONTACT_DATA = normalizeContactData(DEFAULT_DATA);
+                CONTACT_DATA = pendingData || normalizeContactData(DEFAULT_DATA);
             }
             renderUI();
         }
@@ -909,7 +1029,7 @@
                 const logoImgFinal   = logoImagePreviewBase64   || CONTACT_DATA.logo  || "";
                 const portfolioFinal = portfolioPreviewBase64   || CONTACT_DATA.portfolio || "";
 
-                const updated = {
+                const updated = stampProfileData({
                     ...CONTACT_DATA,
                     name: document.getElementById('editName').value,
                     title: document.getElementById('editTitle').value,
@@ -938,7 +1058,7 @@
                         contactBtn: document.getElementById('colorContactBtn').value,
                         utilBtn: document.getElementById('colorUtilBtn').value
                     }
-                };
+                });
 
                 CONTACT_DATA = normalizeContactData(updated);
                 cacheContactData(CONTACT_DATA);
@@ -947,12 +1067,9 @@
                 // FIX: Switch view BEFORE cloud sync so the UI feels instant,
                 // but cloud sync now happens in the background WITH proper image upload.
                 window.toggleView('card');
+                await saveProfileToCloud(CONTACT_DATA);
                 saveButton.textContent = "Saved ✓";
 
-                if (isCloudSynced && firebaseClient) {
-                    // saveProfileToCloud handles image uploads to Storage before writing Firestore
-                    await saveProfileToCloud(CONTACT_DATA);
-                }
             } catch (err) {
                 console.error("Save failed:", err);
                 alert("Save failed: " + (err.message || err));
@@ -964,7 +1081,7 @@
 
         document.getElementById('resetProfileBtn').onclick = async () => {
             if (!confirm("Are you sure you want to reset your profile to the original defaults? This cannot be undone.")) return;
-            const resetData = normalizeContactData(DEFAULT_DATA);
+            const resetData = stampProfileData(DEFAULT_DATA);
             CONTACT_DATA = resetData;
             cacheContactData(CONTACT_DATA);
             renderUI();
@@ -972,9 +1089,7 @@
             logoImagePreviewBase64 = "";
             portfolioPreviewBase64 = "";
             window.toggleView('card');
-            if (isCloudSynced && firebaseClient) {
-                void saveProfileToCloud(resetData);
-            }
+            void saveProfileToCloud(resetData);
         };
 
         document.getElementById('vcfButton').onclick = () => {
